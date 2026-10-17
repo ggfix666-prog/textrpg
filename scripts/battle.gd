@@ -53,7 +53,23 @@ func _ready() -> void:
 		return
 	_build_ui()
 	_build_fighters()
-	_log("Из тени выползает [color=#c9a961]%s[/color] (ур. %d)." % [E["name"], E["lvl"]])
+	if E.get("boss", false):
+		_log("[color=#7a1f1f][b]БОСС![/b][/color] Перед вами [color=#c9a961]%s[/color] (ур. %d)." % [E["name"], E["lvl"]])
+	else:
+		_log("Из тени выползает [color=#c9a961]%s[/color] (ур. %d)." % [E["name"], E["lvl"]])
+	match E.get("first", ""):
+		"player":
+			_log("[color=#c9a961]Вы нападаете из засады![/color]")
+			_hit_enemy(1.0, true)
+		"enemy":
+			_log("Враг не дал вам уйти и бьёт первым!")
+			_enemy_turn()
+	if E["hp"] <= 0:
+		_victory()
+		return
+	if P["hp"] <= 0:
+		_defeat()
+		return
 	_log("Выбери способность на этот бой. Сменить её в бою нельзя.")
 	_refresh()
 
@@ -133,8 +149,8 @@ func _refresh() -> void:
 	elif phase == "turn":
 		_build_turn()
 	elif phase == "over":
-		var back := Style.make_button("Вернуться в профиль", Style.MOSS)
-		back.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/Profile.tscn"))
+		var back := Style.make_button("Продолжить путь", Style.MOSS)
+		back.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/Explore.tscn"))
 		bottom.add_child(back)
 
 
@@ -229,17 +245,14 @@ func _build_fighters() -> void:
 			P["vamp"] = 0.05
 		"archer":
 			P["crit"] = P["crit"] + 0.10
-	P["hp"] = P["max_hp"]
+	P["max_hp"] = SaveManager.max_hp()
+	P["hp"] = clampi(int(SaveManager.data["hp"]), 1, P["max_hp"])
+	P["armor_dur"] = int(SaveManager.data["armor_dur"])
 
-	var emax: int = 40 + lvl * 15
-	E = {
-		"name": "Гоблин", "lvl": lvl,
-		"max_hp": emax, "hp": emax,
-		"dmg": 8 + lvl * 3,
-		"armor": 0.10, "acc": 0.9,
-		"potions": 1,
-		"miss_turns": 0, "nopotion_turns": 0, "poison_turns": 0, "wolf_turns": 0,
-	}
+	# Враг приходит с экрана исследования (если его нет — тестовый гоблин)
+	E = SaveManager.encounter.duplicate(true)
+	if E.is_empty():
+		E = WorldData.make_enemy("goblin", lvl)
 
 
 # ---------- Ввод игрока ----------
@@ -442,16 +455,34 @@ func _tick() -> void:
 
 func _victory() -> void:
 	phase = "over"
+	var is_boss: bool = E.get("boss", false)
 	var gold: int = E["lvl"] * 5 + randi_range(1, 10)   # формула из ТЗ
 	var xp: int = 20 + E["lvl"] * 5
+	if is_boss:
+		gold *= 5
+		xp *= 3
 	SaveManager.data["gold"] += gold
 	SaveManager.data["exp"] += xp
 	SaveManager.data["potions"] = P["potions"]
+	SaveManager.data["hp"] = P["hp"]
+	SaveManager.data["armor_dur"] = P["armor_dur"]
 	_log("[color=#c9a961][b]Победа![/b][/color] Золото: +%d, опыт: +%d." % [gold, xp])
+
+	var loc: String = SaveManager.data["location"]
+	if is_boss:
+		SaveManager.on_boss_defeated(loc, E["name"])
+		_log("[color=#c9a961][b]Босс повержен![/b][/color] С него падает уникальный красный предмет. Трофей записан (предметы появятся на следующем этапе).")
+	else:
+		SaveManager.add_kill(loc)
+
 	while SaveManager.data["exp"] >= SaveManager.exp_needed(SaveManager.data["level"]):
 		SaveManager.data["exp"] -= SaveManager.exp_needed(SaveManager.data["level"])
 		SaveManager.data["level"] += 1
-		_log("[color=#c9a961][b]Новый уровень: %d![/b][/color]" % SaveManager.data["level"])
+		SaveManager.data["hp"] = SaveManager.max_hp()   # новый уровень лечит до максимума
+		_log("[color=#c9a961][b]Новый уровень: %d![/b][/color] Здоровье восстановлено." % SaveManager.data["level"])
+
+	SaveManager.pending_msg = "Вы победили: %s. Золото +%d." % [E["name"], gold]
+	SaveManager.encounter = {}
 	SaveManager.save_game()
 	_refresh()
 
@@ -461,6 +492,11 @@ func _defeat() -> void:
 	var lost := int(SaveManager.data["gold"] * 0.2)   # смерть: -20% золота
 	SaveManager.data["gold"] -= lost
 	SaveManager.data["potions"] = P["potions"]
+	SaveManager.data["hp"] = SaveManager.max_hp()     # возрождение в лагере
+	SaveManager.data["armor_dur"] = 0                 # надетое снаряжение ломается (по ТЗ)
 	_log("[color=#d46a6a][b]Вы пали в бою...[/b][/color] Потеряно золота: %d." % lost)
+	_log("Вы приходите в себя в лагере. Броня сломана: починить её можно на привале. (Потеря 3-7 предметов из инвентаря появится вместе с инвентарём.)")
+	SaveManager.pending_msg = "Вы очнулись в лагере после поражения."
+	SaveManager.encounter = {}
 	SaveManager.save_game()
 	_refresh()

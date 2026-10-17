@@ -12,6 +12,7 @@ config/features=PackedStringArray("4.3", "GL Compatibility")
 
 SaveManager="*res://autoload/save_manager.gd"
 Style="*res://autoload/style.gd"
+WorldData="*res://autoload/world_data.gd"
 
 [display]
 
