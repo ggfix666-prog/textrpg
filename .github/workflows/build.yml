@@ -55,52 +55,15 @@ jobs:
           EOT
           cat ~/.config/godot/editor_settings-4.3.tres
 
-      - name: Диагностика и экспорт
+      - name: Импорт ресурсов и экспорт APK
         run: |
           export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$GITHUB_WORKSPACE/debug.keystore"
           export GODOT_ANDROID_KEYSTORE_DEBUG_USER="androiddebugkey"
           export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="android"
           mkdir -p build
           godot --headless --import || true
-
-          # Добавляем тестовый пресет Linux, чтобы проверить, видит ли Godot шаблоны вообще
-          cat >> export_presets.cfg <<'EOP'
-
-          [preset.1]
-
-          name="Linux"
-          platform="Linux"
-          runnable=true
-          export_filter="all_resources"
-          export_path="build/test.x86_64"
-
-          [preset.1.options]
-
-          binary_format/architecture="x86_64"
-          EOP
-
-          echo "##### ПРОБА 1: Linux (проверка шаблонов)"
-          godot --headless --export-debug "Linux" build/test.x86_64 2>&1 | tail -15 || true
+          godot --headless --export-debug "Android" build/game.apk
           ls -la build
-
-          echo "##### ПРОБА 2: Android release (чтобы увидеть тексты ошибок)"
-          godot --headless --export-release "Android" build/rel.apk 2>&1 | grep -v "^$" | tail -20 || true
-
-          echo "##### ПРОБА 3: Android debug без gradle"
-          godot --headless --export-debug "Android" build/game.apk 2>&1 | grep -v "^$" | tail -20 || true
-
-          if [ ! -f build/game.apk ]; then
-            echo "##### ПРОБА 4: Android debug через gradle"
-            mkdir -p android/build
-            unzip -q ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/android_source.zip -d android/build
-            printf "%s" "${GODOT_VERSION}.stable" > android/.build_version
-            touch android/build/.gdignore
-            sed -i 's#gradle_build/use_gradle_build=false#gradle_build/use_gradle_build=true#' export_presets.cfg
-            godot --headless --export-debug "Android" build/game.apk 2>&1 | grep -v "^$" | tail -40 || true
-          fi
-
-          ls -la build
-          test -f build/game.apk
 
       - uses: actions/upload-artifact@v4
         with:
