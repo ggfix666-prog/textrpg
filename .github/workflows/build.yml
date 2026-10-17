@@ -14,55 +14,46 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Готовый образ с Godot, шаблонами экспорта и Android SDK
+    container:
+      image: barichello/godot-ci:4.3
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Установка Godot и шаблонов экспорта
+      - name: Подготовка шаблонов и ключа
         run: |
-          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
-          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
-          unzip -q Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
-          sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
-          mkdir -p ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
-          unzip -q Godot_v${GODOT_VERSION}-stable_export_templates.tpz
-          mv templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
-
-      - name: Установка Android SDK
-        run: |
-          export ANDROID_HOME=/usr/local/lib/android/sdk
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34"
-          ls $ANDROID_HOME $ANDROID_HOME/build-tools $ANDROID_HOME/cmdline-tools
-
-      - name: Создание debug-ключа
-        run: |
-          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999
+          mkdir -p ~/.local/share/godot/export_templates ~/.config/godot
+          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore "$PWD/debug.keystore" -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
 
       - name: Настройка Godot для Android
         run: |
-          mkdir -p ~/.config/godot
+          SDK=""
+          for d in /usr/lib/android-sdk "$ANDROID_HOME" "$ANDROID_SDK_ROOT" /root/android-sdk; do
+            if [ -n "$d" ] && [ -d "$d" ]; then SDK="$d"; break; fi
+          done
+          JAVA=$(dirname $(dirname $(readlink -f $(which javac))))
+          echo "SDK=$SDK JAVA=$JAVA"
+          ls "$SDK" || true
           cat > ~/.config/godot/editor_settings-4.3.tres <<EOT
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
-          export/android/android_sdk_path = "${ANDROID_HOME}"
-          export/android/java_sdk_path = "${JAVA_HOME}"
-          export/android/debug_keystore = "${GITHUB_WORKSPACE}/debug.keystore"
+          export/android/android_sdk_path = "$SDK"
+          export/android/java_sdk_path = "$JAVA"
+          export/android/debug_keystore = "$PWD/debug.keystore"
           export/android/debug_keystore_user = "androiddebugkey"
           export/android/debug_keystore_pass = "android"
           EOT
+          cat ~/.config/godot/editor_settings-4.3.tres
 
       - name: Импорт ресурсов и экспорт APK
         run: |
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$PWD/debug.keystore"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_USER="androiddebugkey"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="android"
           mkdir -p build
           godot --headless --import || true
-          ls ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/ | head -30
           godot --headless --verbose --export-debug "Android" build/game.apk
 
       - uses: actions/upload-artifact@v4
@@ -70,9 +61,18 @@ jobs:
           name: textrpg-apk
           path: build/game.apk
 
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: textrpg-apk
+          path: out
+
       - name: Публикация APK для прямого скачивания
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --yes --cleanup-tag -R "$GITHUB_REPOSITORY" || true
-          gh release create latest build/game.apk --title "Последняя сборка" --notes "Автоматическая сборка" --target "$GITHUB_SHA" -R "$GITHUB_REPOSITORY"
+          gh release create latest out/game.apk --title "Последняя сборка" --notes "Автоматическая сборка" --target "$GITHUB_SHA" -R "$GITHUB_REPOSITORY"
