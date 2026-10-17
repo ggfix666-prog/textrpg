@@ -14,47 +14,93 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Готовый образ с Godot, шаблонами экспорта и Android SDK
-    container:
-      image: barichello/godot-ci:4.3
     steps:
       - uses: actions/checkout@v4
 
-      - name: Подготовка шаблонов и ключа
-        run: |
-          mkdir -p ~/.local/share/godot/export_templates ~/.config/godot
-          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
-          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore "$PWD/debug.keystore" -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
-      - name: Настройка Godot для Android
+      - name: Установка Godot и шаблонов экспорта
         run: |
-          SDK=""
-          for d in /usr/lib/android-sdk "$ANDROID_HOME" "$ANDROID_SDK_ROOT" /root/android-sdk; do
-            if [ -n "$d" ] && [ -d "$d" ]; then SDK="$d"; break; fi
-          done
-          JAVA=$(dirname $(dirname $(readlink -f $(which javac))))
-          echo "SDK=$SDK JAVA=$JAVA"
-          ls "$SDK" || true
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          unzip -q Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+          mkdir -p ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          unzip -q Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          mv templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
+
+      - name: Android SDK и ключ
+        run: |
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" || true
+          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore "$GITHUB_WORKSPACE/debug.keystore" -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+
+      - name: Настройка Godot
+        run: |
+          mkdir -p ~/.config/godot
           cat > ~/.config/godot/editor_settings-4.3.tres <<EOT
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
-          export/android/android_sdk_path = "$SDK"
-          export/android/java_sdk_path = "$JAVA"
-          export/android/debug_keystore = "$PWD/debug.keystore"
+          export/android/android_sdk_path = "${ANDROID_HOME}"
+          export/android/java_sdk_path = "${JAVA_HOME}"
+          export/android/debug_keystore = "${GITHUB_WORKSPACE}/debug.keystore"
           export/android/debug_keystore_user = "androiddebugkey"
           export/android/debug_keystore_pass = "android"
           EOT
           cat ~/.config/godot/editor_settings-4.3.tres
 
-      - name: Импорт ресурсов и экспорт APK
+      - name: Диагностика и экспорт
         run: |
-          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$PWD/debug.keystore"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$GITHUB_WORKSPACE/debug.keystore"
           export GODOT_ANDROID_KEYSTORE_DEBUG_USER="androiddebugkey"
           export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="android"
           mkdir -p build
           godot --headless --import || true
-          godot --headless --verbose --export-debug "Android" build/game.apk
+
+          # Добавляем тестовый пресет Linux, чтобы проверить, видит ли Godot шаблоны вообще
+          cat >> export_presets.cfg <<'EOP'
+
+          [preset.1]
+
+          name="Linux"
+          platform="Linux"
+          runnable=true
+          export_filter="all_resources"
+          export_path="build/test.x86_64"
+
+          [preset.1.options]
+
+          binary_format/architecture="x86_64"
+          EOP
+
+          echo "##### ПРОБА 1: Linux (проверка шаблонов)"
+          godot --headless --export-debug "Linux" build/test.x86_64 2>&1 | tail -15 || true
+          ls -la build
+
+          echo "##### ПРОБА 2: Android release (чтобы увидеть тексты ошибок)"
+          godot --headless --export-release "Android" build/rel.apk 2>&1 | grep -v "^$" | tail -20 || true
+
+          echo "##### ПРОБА 3: Android debug без gradle"
+          godot --headless --export-debug "Android" build/game.apk 2>&1 | grep -v "^$" | tail -20 || true
+
+          if [ ! -f build/game.apk ]; then
+            echo "##### ПРОБА 4: Android debug через gradle"
+            mkdir -p android/build
+            unzip -q ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/android_source.zip -d android/build
+            printf "%s" "${GODOT_VERSION}.stable" > android/.build_version
+            touch android/build/.gdignore
+            sed -i 's#gradle_build/use_gradle_build=false#gradle_build/use_gradle_build=true#' export_presets.cfg
+            godot --headless --export-debug "Android" build/game.apk 2>&1 | grep -v "^$" | tail -40 || true
+          fi
+
+          ls -la build
+          test -f build/game.apk
 
       - uses: actions/upload-artifact@v4
         with:
