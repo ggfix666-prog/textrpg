@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 env:
   GODOT_VERSION: "4.3"
 
@@ -31,9 +34,11 @@ jobs:
 
       - name: Установка Android SDK
         run: |
-          export ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" "cmdline-tools;latest"
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34"
+          ls $ANDROID_HOME $ANDROID_HOME/build-tools $ANDROID_HOME/cmdline-tools
 
       - name: Создание debug-ключа
         run: |
@@ -46,7 +51,7 @@ jobs:
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
-          export/android/android_sdk_path = "${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export/android/android_sdk_path = "${ANDROID_HOME}"
           export/android/java_sdk_path = "${JAVA_HOME}"
           export/android/debug_keystore = "${GITHUB_WORKSPACE}/debug.keystore"
           export/android/debug_keystore_user = "androiddebugkey"
@@ -57,9 +62,17 @@ jobs:
         run: |
           mkdir -p build
           godot --headless --import || true
-          godot --headless --export-debug "Android" build/game.apk
+          ls ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/ | head -30
+          godot --headless --verbose --export-debug "Android" build/game.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: textrpg-apk
           path: build/game.apk
+
+      - name: Публикация APK для прямого скачивания
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag -R "$GITHUB_REPOSITORY" || true
+          gh release create latest build/game.apk --title "Последняя сборка" --notes "Автоматическая сборка" --target "$GITHUB_SHA" -R "$GITHUB_REPOSITORY"
