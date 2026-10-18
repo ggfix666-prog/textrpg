@@ -3,8 +3,8 @@ config_version=5
 
 [application]
 
-config/name="Хроники Мрака"
-config/icon="res://icon.svg"
+config/name="Sacred Mobail"
+config/icon="res://icon.jpg"
 run/main_scene="res://scenes/MainMenu.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
 
