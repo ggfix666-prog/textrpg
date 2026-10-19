@@ -3,8 +3,8 @@ config_version=5
 
 [application]
 
-config/name="Sacred Mobail"
-config/icon="res://icon.jpg"
+config/name="Хроники Мрака"
+config/icon="res://icon.svg"
 run/main_scene="res://scenes/MainMenu.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
 
@@ -12,7 +12,10 @@ config/features=PackedStringArray("4.3", "GL Compatibility")
 
 SaveManager="*res://autoload/save_manager.gd"
 Style="*res://autoload/style.gd"
+ItemDB="*res://autoload/item_db.gd"
 WorldData="*res://autoload/world_data.gd"
+Combat="*res://autoload/combat.gd"
+Online="*res://autoload/online.gd"
 
 [display]
 

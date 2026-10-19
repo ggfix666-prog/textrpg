@@ -32,13 +32,13 @@ jobs:
           unzip -q Godot_v${GODOT_VERSION}-stable_export_templates.tpz
           mv templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
 
-      - name: Android SDK и ключ
+      - name: Android SDK и ключ подписи (постоянный, лежит в репозитории)
         run: |
           export ANDROID_HOME=/usr/local/lib/android/sdk
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" || true
-          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore "$GITHUB_WORKSPACE/debug.keystore" -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+          ls -la "$GITHUB_WORKSPACE/debug.keystore"
 
       - name: Настройка Godot
         run: |
@@ -55,20 +55,44 @@ jobs:
           EOT
           cat ~/.config/godot/editor_settings-4.3.tres
 
-      - name: Импорт ресурсов и экспорт APK
+      - name: Номер версии
+        run: |
+          sed -i "s/^version\/code=.*/version\/code=${GITHUB_RUN_NUMBER}/" export_presets.cfg
+          grep "version/code" export_presets.cfg
+
+      - name: Импорт ресурсов
+        run: |
+          godot --headless --import || true
+
+      - name: Проверка скриптов
+        run: |
+          mkdir -p build
+          : > build/check.txt
+          for f in $(find . -name "*.gd" -not -path "./.godot/*"); do
+            out=$(timeout 60 godot --headless --path . --check-only --script "res://${f#./}" 2>&1 || true)
+            if echo "$out" | grep -qiE "error"; then
+              echo "=== $f ===" >> build/check.txt
+              echo "$out" | grep -iE "error|line" >> build/check.txt
+            fi
+          done
+          [ -s build/check.txt ] || echo "Все скрипты прошли проверку" > build/check.txt
+          cat build/check.txt
+
+      - name: Экспорт APK
         run: |
           export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$GITHUB_WORKSPACE/debug.keystore"
           export GODOT_ANDROID_KEYSTORE_DEBUG_USER="androiddebugkey"
           export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="android"
           mkdir -p build
-          godot --headless --import || true
           godot --headless --export-debug "Android" build/game.apk
           ls -la build
 
       - uses: actions/upload-artifact@v4
         with:
           name: textrpg-apk
-          path: build/game.apk
+          path: |
+            build/game.apk
+            build/check.txt
 
   release:
     needs: build
@@ -84,4 +108,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --yes --cleanup-tag -R "$GITHUB_REPOSITORY" || true
-          gh release create latest out/game.apk --title "Последняя сборка" --notes "Автоматическая сборка" --target "$GITHUB_SHA" -R "$GITHUB_REPOSITORY"
+          gh release create latest out/game.apk out/check.txt --title "Последняя сборка" --notes "Автоматическая сборка" --target "$GITHUB_SHA" -R "$GITHUB_REPOSITORY"
